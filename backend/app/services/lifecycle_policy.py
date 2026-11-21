@@ -93,6 +93,36 @@ class LifecyclePolicyService(BaseModuleService):
         store.rows("cold_archive").append(task)
         return task
 
+    def open_archive_handoff(self, policy_id: int, partitions: dict[str, int]) -> dict[str, Any]:
+        """沿 lifecycle_policy -> cold_archive 调用链，为策略目标资产开启归档交接批次。
+
+        清退状态后续由 cold_archive 按交接批次推进回写本策略。
+        """
+        # 局部导入，避免模块加载期循环依赖
+        from app.services.cold_archive import ColdArchiveService
+
+        policy = self.get_entry(policy_id)
+        if not policy:
+            return {"ok": False, "error": "策略不存在"}
+        asset_code = policy.get("目标资产", "")
+        tasks = [
+            t for t in store.rows("cold_archive")
+            if t.get("源资产") == asset_code and t.get("triggered_by_id") == policy_id
+        ]
+        task_id = tasks[-1]["id"] if tasks else None
+        result = ColdArchiveService().open_handoff_batch(
+            asset_code, partitions,
+            archive_task_id=task_id, policy_id=policy_id,
+        )
+        if result.get("ok"):
+            batch_id = result["batch"]["batch_id"]
+            policy["last_handoff_batch"] = batch_id
+            batches = policy.setdefault("handoff_batches", [])
+            if batch_id not in batches:
+                batches.append(batch_id)
+            policy["清退状态"] = "分区清退中"
+        return result
+
     def _trigger_retention_cleanup(self, policy: dict[str, Any]) -> dict[str, Any]:
         """触发保留清理任务。"""
         task_id = store.next_id("retention_job")

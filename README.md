@@ -81,5 +81,24 @@ npm run dev
 - 列表接口统一返回 `{ items, total, page, size }`，动作接口统一返回 `{ ok, message }`。
 - 状态流转只允许在 `app/services` 里改，路由层不做业务判断。
 
+## 冷热归档交接批次（冷热移交可靠性）
+
+冷热样本按资产分区（如 `east`/`west` 各 4 行）归档到**可核对的归档交接批次**，
+由 `app/services/cold_archive.py` 与路由 `app/routers/handoff.py` 承载：
+
+- `POST /api/handoff/batches` / `POST /api/handoff/policy/open`：按分区开启交接批次
+  （后者沿 `lifecycle_policy -> cold_archive` 调用链开启）。
+- `POST /api/handoff/receipts`：提交冷端归档回执。回执单号全局幂等，同一分区重复
+  提交只生效一次；确认后登记校验号（如 `A71`）与冷端实际存储位置，失败/不可读/
+  行数不符置为「回执中断」，清退阻塞且热端继续保留。
+- `POST /api/handoff/hot/enable`：热端启用申请与归档不互斥；热端数据在释放前始终
+  可读，返回是否与归档冲突及冷副本能否用于随后一次恢复。
+- `POST /api/handoff/hot/release`：释放热端前强制验证存在一份行数完整、校验号已确认
+  且可读的冷副本；未确认/中断分区拒绝释放，东区的确认不能用于释放西区。
+- `POST /api/handoff/read`：兼容已有存储位置（热端）与原恢复入口（冷端），逐行说明
+  每行的读取来源、位置与校验号。
+- `GET /api/handoff/batches/{id}/reconciliation`：批次核对表，逐分区对照热端可读行
+  与归档校验记录；清退状态按交接批次推进回写生命周期策略（`清退状态`/`清退明细`）。
+
 领域：数据工程
 子方向：数仓与数据湖
